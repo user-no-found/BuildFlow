@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=65"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "buildflow"
+version = "0.1.0"
+description = "Native project build execution, logs and atomic artifact publication"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{name = "user-no-found"}]
+dependencies = []
+
+[project.scripts]
+buildflow = "buildflow.cli:main"
