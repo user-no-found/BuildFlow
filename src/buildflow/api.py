@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import json
 import os
 from pathlib import Path
 import platform
@@ -12,7 +11,10 @@ import threading
 import time
 import uuid
 from . import artifacts as publication
+from .activity import Activities
 from .contracts import Artifact, BuildError, BuildResult, Context, Project, Step
+from .event_stream import EventStream
+from .display_text import plain
 from .locking import Lock
 from .metadata import identity, version
 from .pipeline import execute
@@ -95,13 +97,10 @@ def build(project_path: Path | str | Project, *, steps=None, artifacts=None,
         work = state / run_id
         work.mkdir()
         view = Terminal() if ui is None else ui
-        with (work / "events.jsonl").open("w", encoding="utf-8", buffering=1) as events:
-            def sink(event):
-                if event["type"] != "tick":
-                    events.write(json.dumps({"time": datetime.now(timezone.utc).isoformat(), **event}, ensure_ascii=False) + "\n")
-                    events.flush()
-                view(event)
-            context = Context(project, work, output, Runner(work / "build.log", sink), dict(metadata or {}))
+        with (work / "events.jsonl").open("w", encoding="utf-8", buffering=1) as events, EventStream(events, view) as sink:
+            activities = Activities(sink)
+            context = Context(project, work, output, Runner(work / "build.log", sink, activities=activities),
+                              dict(metadata or {}), activities)
             previous = {}
             if threading.current_thread() is threading.main_thread():
                 def cancel(signum, frame):
@@ -123,18 +122,32 @@ def build(project_path: Path | str | Project, *, steps=None, artifacts=None,
                           "target_os": project.config.get("target_os"), "target_arch": project.config.get("target_arch"),
                           "tools": {"buildflow": identity()}, "metadata": context.metadata,
                           "log": str(work / "build.log"), "events": str(work / "events.jsonl")}
-                final = publication.publish(output, work, list(selected), report)
+                with context.activity("发布产物"):
+                    sink.flush()
+                    if sink.failure is not None:
+                        raise BuildError(f"构建显示或事件记录失败，未发布产物: {plain(str(sink.failure))}")
+                    final = publication.publish(output, work, list(selected), report)
                 sink({"type": "build_end", "output": str(final),
                       "elapsed": time.monotonic() - started, "log": str(work / "build.log")})
+                sink.finish()
+                if sink.failure is not None:
+                    # Publication is committed; a late display fault cannot undo it.
+                    try:
+                        print(f"[警告] 产物已发布至 {final}，显示或事件记录失败: {plain(str(sink.failure))}", file=sys.stderr)
+                    except OSError:
+                        pass
                 return BuildResult(run_id, final, work / "report.json", context.metadata)
             except KeyboardInterrupt as exc:
                 sink({"type": "error", "message": f"构建已取消；日志: {work}"})
-                raise BuildError(f"构建已取消；日志: {work}", 130) from exc
+                sink.flush()
+                raise BuildError(f"构建已取消；日志: {work}", 130, reported=sink.error_delivered) from exc
             except Exception as exc:
                 sink({"type": "error", "message": f"{exc}；日志: {work}"})
+                sink.flush()
                 if isinstance(exc, BuildError):
+                    exc.reported = sink.error_delivered
                     raise
-                raise BuildError(f"{exc}；日志: {work}") from exc
+                raise BuildError(f"{exc}；日志: {work}", reported=sink.error_delivered) from exc
             finally:
                 for signum, handler in previous.items():
                     signal.signal(signum, handler)

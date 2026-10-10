@@ -158,7 +158,28 @@ application/
     example_1.2.4
 ```
 
-`build.log` 在命令运行期间持续写入原始 stdout/stderr 字节及命令边界；两个流的相对顺序取决于操作系统调度。`events.jsonl` 记录结构化事件和完整解码输出。终端显示使用单行状态、步骤数量和实际耗时；不估计百分比。重定向时输出稳定文本，`NO_COLOR` 禁用颜色，中文按终端列宽裁剪动态状态。日志保留原始内容，显示层清理终端控制字符。失败摘要包含实际失败阶段、退出码和有界输出尾部：优先 stderr，然后 stdout，各最多 6 行，每行保留末尾 400 个字符；完整诊断仍在日志中。命令摘要识别 `nice` / `taskset` 包装链、主程序和安全的 Go 子命令，不打印任意参数或环境。TTY 将错误逐行换行，长路径不会把末尾原因裁掉。`capture` 的成功 stdout 只返回调用者并保留在日志及结构化事件中，不在终端回显；失败时同样显示有界尾部。
+`build.log` 在命令运行期间持续写入原始 stdout/stderr 字节及命令边界；两个流的相对顺序取决于操作系统调度。`events.jsonl` 记录结构化事件和完整解码输出。日志含原始 argv 和子进程数据，应按项目敏感信息管理，不能直接作为公开展示内容。
+
+终端保留阶段标题和已完成动作，动态行显示当前语义动作、目标、实际耗时和安全命令摘要；本地 Python 操作期间也持续刷新。标题、状态、耗时分别着色，不估计百分比。`NO_COLOR` 只禁用颜色，`TERM=dumb` 禁用颜色和动画；stderr 重定向时输出稳定文本。UI 写 stderr，`>file` 只重定向 stdout，合并日志可用 `>file 2>&1`。中文按终端列宽裁剪，完成行保留耗时，错误和产物路径按列宽换行。不能编码 Unicode 符号时使用 ASCII 图标。Windows 控制台只有成功开启 VT 后才使用 ANSI，否则使用稳定文本；同一实现由 `build.sh` / `build.cmd` 或 Python API 复用。
+
+应用或格式工具只报告动作语义，不输出 ANSI，也不依赖特定构建格式：
+
+```python
+def compile_target(ctx):
+    with ctx.activity("编译程序", target="linux/amd64"):
+        ctx.status("检查本地输入")
+        check_inputs()
+        ctx.runner.run(["go", "build", "-o", str(ctx.work / "app"), "."],
+                       cwd=ctx.project.root)
+```
+
+`ctx.activity(name, *, target="")` 是可嵌套上下文，完成时保留动作结果，抛异常时只标记该动作结束；`ctx.status(message)` 更新当前动作详情。标签和详情必须是调用者有意提供的安全文本，不能包含令牌、原始 argv 或捕获的 JSON/补丁。原 `run` / `capture` 调用接口不变。Context 直接构造时动作接口默认不输出，不要求第三方 runner 实现额外属性。作用域使用 Python contextvars；将工作交给新线程时，可用 `contextvars.copy_context().run` 显式传递当前作用域。
+
+事件中的 `activity_start/end` 使用同一 `id`，开始事件含 `parent_id/name/target`，结束事件含 `outcome/elapsed`；`activity_status` 含 `activity_id/message`。`command` 和 `command_end` 使用同一 `id/activity_id/label`，结束事件含真实 `returncode/elapsed`，未启动的进程返回码为 `null`。命令摘要跳过已识别的 `nice` / `taskset` 包装，仅显示安全的主程序名和允许的 Go 子命令，不展示其余参数或环境。TTY 不将任意子进程输出转成活动详情；`capture` stdout 只返回调用者并保留在日志和事件中，不回显。非 TTY 的普通命令输出保留可读文本，跨输出块清理终端控制序列。
+
+非零命令退出并不自动意味着构建失败：应用可以捕获预期负向验证的异常。只有逃出构建操作的异常决定最终失败。失败摘要包含阶段、退出码和有界输出尾部，stderr/stdout 各最多 6 行、每行最多末尾 400 个字符；完整诊断仍在日志中。`BuildError.reported` 表示最终错误事件已经交付 UI，外层 CLI 只在它为 false 时打印异常，避免重复摘要。
+
+每次 API 构建使用一个事件写入线程负责日志与 UI，并提供固定频率心跳；`ui(event)` 回调及可选 `ui.close()` 都在该线程调用。结束时排空队列、停止心跳并恢复终端状态。发布前检查事件记录和 UI 故障，故障会阻止发布；发布完成后的显示故障只报告“产物已发布”警告，不将已发布结果伪报为构建失败。底层命令失败时，显示故障不覆盖其真实退出码。
 
 全部步骤成功且所有产物完成复制、SHA-256 和权限检查后，文件直接发布到 `output/<声明文件名>`。不同版本并存；同名文件仅在内容与权限完全相同时复用，否则明确拒绝覆盖，要求选择新版本。报告保留于 `.build/<run-id>/report.json`，记录应用版本、工具输入、主机和目标、metadata、每个产物的体积、哈希、权限和日志位置。应用报告、截图和内部证据也应写在 work 内，不列入交付 Artifact。
 

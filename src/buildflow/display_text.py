@@ -38,3 +38,38 @@ def wrapped(text: str, width: int):
             else:
                 line = line[len(part):]
             yield part
+
+
+def columns(text: str) -> int:
+    """Measure the same terminal cells used by clipped text."""
+    return sum(0 if unicodedata.combining(char) else
+               (2 if unicodedata.east_asian_width(char) in "WF" else 1) for char in text)
+
+
+class PlainStream:
+    """Strip controls across subprocess chunk boundaries without buffering payloads."""
+
+    def __init__(self):
+        self.state = "text"
+
+    def feed(self, text):
+        output = []
+        for char in text:
+            if self.state == "text":
+                if char == "\x1b":
+                    self.state = "escape"
+                elif char in "\n\t" or not unicodedata.category(char).startswith("C"):
+                    output.append(char)
+            elif self.state == "escape":
+                self.state = "csi" if char == "[" else ("string" if char in "]P^_X" else "text")
+            elif self.state == "csi":
+                if "@" <= char <= "~":
+                    self.state = "text"
+            elif self.state == "string":
+                if char == "\x07":
+                    self.state = "text"
+                elif char == "\x1b":
+                    self.state = "string_escape"
+            elif self.state == "string_escape":
+                self.state = "text" if char == "\\" else "string"
+        return "".join(output)

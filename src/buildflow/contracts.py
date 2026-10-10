@@ -4,14 +4,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Protocol
+from .activity import Activities
 
 
 class BuildError(Exception):
     """Build failure with an exit status suitable for a CLI."""
 
-    def __init__(self, message: str, exit_code: int = 1):
+    def __init__(self, message: str, exit_code: int = 1, *, reported: bool = False):
         super().__init__(message)
         self.exit_code = exit_code if exit_code > 0 else 128 - exit_code
+        self.reported = reported
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,15 @@ class Context:
     output: Path
     runner: RunnerProtocol
     metadata: dict[str, Any] = field(default_factory=dict)
+    activities: Activities = field(default_factory=Activities, repr=False)
+
+    def activity(self, name: str, *, target: str = ""):
+        """Report a scoped semantic action; labels must not contain secrets."""
+        return self.activities.activity(name, target=target)
+
+    def status(self, message: str) -> None:
+        """Report deliberate activity detail, never raw argv or capture payloads."""
+        self.activities.status(message)
 
 
 @dataclass(frozen=True)

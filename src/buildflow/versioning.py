@@ -6,6 +6,7 @@ import re
 import sys
 import tempfile
 from .contracts import BuildError, Project
+from .console import prompt_line
 from .display_text import plain
 
 
@@ -47,7 +48,7 @@ def suggested_version(value: str, channel: str) -> str:
 
 
 def _answer(prompt: str) -> str:
-    print(prompt, file=sys.stderr, end="", flush=True)
+    prompt_line([(prompt, "1;36")], end="")
     try:
         answer = sys.stdin.readline()
         if not answer:
@@ -72,8 +73,8 @@ def choose_version(project: Project, *, build_version=None, next_version=False,
     has_provider = callable(installed_version) or installed_version is not None
     installed = installed_version(project) if callable(installed_version) else installed_version
     installed_label = plain(str(installed)) if installed is not None else ("未安装" if has_provider else "未检测")
-    print(f"已安装版本: {installed_label}", file=sys.stderr)
-    print(f"项目版本: {current}", file=sys.stderr)
+    prompt_line([("已安装版本: ", "2"), (installed_label, "1")])
+    prompt_line([("项目版本: ", "2"), (current, "1;36")])
     if build_version is not None:
         selected_channel = version_channel(build_version)
         if channel is not None and channel != selected_channel:
@@ -85,7 +86,8 @@ def choose_version(project: Project, *, build_version=None, next_version=False,
         raise BuildError("非交互构建必须指定 --build-version X.Y.Z[-XX] 或 --next-version，可配 --channel")
     if channel is None:
         default = version_channel(current)
-        print("1. 正式版（x.x.x）\n2. 测试版（x.x.x-xx）", file=sys.stderr)
+        prompt_line([("1. ", "36"), ("正式版", "1"), ("（x.x.x）", "2")])
+        prompt_line([("2. ", "36"), ("测试版", "1"), ("（x.x.x-xx）", "2")])
         default_number = "1" if default == "stable" else "2"
         selected = _answer(f"构建类型 [{default_number}]: ") or default
         choices = {"stable": "stable", "test": "test", "正式": "stable", "测试": "test", "1": "stable", "2": "test"}

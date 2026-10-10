@@ -8,6 +8,9 @@ import queue
 import subprocess
 import sys
 import threading
+import time
+import uuid
+from .activity import Activities
 from .command_diagnostics import OutputTail, command_label
 from .contracts import BuildError, Completed, EventSink
 from .platform_process import ProcessTree
@@ -24,11 +27,12 @@ _WINDOWS_BOOTSTRAP = (
 class Runner:
     """One build's subprocess runner with a continuously flushed raw log."""
 
-    def __init__(self, log_path: Path, sink: EventSink | None = None):
+    def __init__(self, log_path: Path, sink: EventSink | None = None, *, activities=None):
         self.log_path = Path(log_path)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         self.log_path.touch(exist_ok=True)
         self.sink = sink or (lambda event: None)
+        self.activities = activities or Activities(self.sink)
 
     def run(self, argv, cwd: Path, env=None) -> Completed:
         """Run a command, failing with its real nonzero exit status."""
@@ -46,7 +50,11 @@ class Runner:
         environment = os.environ.copy()
         if env:
             environment.update({str(key): str(value) for key, value in env.items()})
-        self.sink({"type": "command", "argv": list(args), "cwd": str(cwd)})
+        identity = uuid.uuid4().hex
+        started = time.monotonic()
+        activity_id = self.activities.current.get()
+        self.sink({"type": "command", "id": identity, "activity_id": activity_id,
+                   "label": command_label(args), "argv": list(args), "cwd": str(cwd)})
         tree = ProcessTree()
         process = None
         readers = []
@@ -92,7 +100,7 @@ class Runner:
                         tail = decoders[label].decode(b"", final=True)
                         if tail:
                             output_tail.append(label, tail)
-                            self.sink({"type": "output", "stream": label, "text": tail,
+                            self.sink({"type": "output", "id": identity, "stream": label, "text": tail,
                                        "captured": capture and label == "stdout"})
                         continue
                     log.write(chunk)
@@ -100,7 +108,7 @@ class Runner:
                         chunks.append(chunk)
                     text = decoders[label].decode(chunk)
                     output_tail.append(label, text)
-                    self.sink({"type": "output", "stream": label, "text": text,
+                    self.sink({"type": "output", "id": identity, "stream": label, "text": text,
                                "captured": capture and label == "stdout"})
                 code = process.wait()
             if code:
@@ -127,3 +135,6 @@ class Runner:
             tree.close()
             for reader in readers:
                 reader.join(timeout=2)
+            self.sink({"type": "command_end", "id": identity, "activity_id": activity_id,
+                       "label": command_label(args), "returncode": process.returncode if process else None,
+                       "elapsed": time.monotonic() - started})

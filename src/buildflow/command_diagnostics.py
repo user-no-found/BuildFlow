@@ -25,7 +25,7 @@ class OutputTail:
 
 
 def command_label(argv) -> str:
-    """Identify reliable nice/taskset wrappers and safe Go subcommands only."""
+    """Skip recognized nice/taskset wrappers and label only the safe leaf command."""
     index = 0
     labels = []
     while index < len(argv):
@@ -58,4 +58,4 @@ def command_label(argv) -> str:
             break
         if len(labels) >= 4:
             break
-    return " → ".join(labels) + "（其余参数省略）"
+    return labels[-1] if labels else "程序"

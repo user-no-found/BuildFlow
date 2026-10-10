@@ -99,7 +99,8 @@ def main(argv=None) -> int:
         print(result.output)
         return 0
     except BuildError as exc:
-        print(f"BuildFlow: {exc}", file=sys.stderr)
+        if not exc.reported:
+            print(f"BuildFlow: {exc}", file=sys.stderr)
         return exc.exit_code
     except (OSError, ValueError, ImportError, AttributeError) as exc:
         print(f"BuildFlow: {exc}", file=sys.stderr)
