@@ -57,6 +57,8 @@ class EventStream:
 
     def _write(self):
         active = False
+        interactions = 0
+        deferred = []
         deadline = time.monotonic() + .1
         while True:
             try:
@@ -85,9 +87,22 @@ class EventStream:
                     active = True
                 elif kind in {"build_end", "error"}:
                     active = False
-            if kind != "tick" or active:
+            if kind == "interaction_start":
+                interactions += 1
+                self._present(event)
+            elif kind == "interaction_end":
+                interactions -= 1
+                self._present(event)
+                if interactions == 0:
+                    for pending in deferred:
+                        self._present(pending)
+                    deferred.clear()
+            elif interactions:
+                if kind != "tick":
+                    deferred.append(event)
+            elif kind != "tick" or active:
                 self._present(event)
             if time.monotonic() >= deadline:
-                if kind != "tick" and active:
+                if kind != "tick" and active and not interactions:
                     self._present({"type": "tick"})
                 deadline = time.monotonic() + .1

@@ -23,6 +23,7 @@ class Terminal:
         self.commands = {}
         self.detail = ""
         self.output_streams = {}
+        self.interactions = 0
 
     def close(self):
         """Release console capabilities after the final event has been rendered."""
@@ -117,6 +118,18 @@ class Terminal:
             self._path("产物", event["output"])
             if event.get("log"):
                 self._path("日志", event["log"])
+        elif kind == "notice":
+            style = {"info": "36", "warning": "33", "error": "31"}[event["level"]]
+            for line in wrapped("[提示] " + event["message"],
+                                self.console.width() if self.tty else 10000):
+                self._line((line, style))
+        elif kind == "interaction_start":
+            self.interactions += 1
+            self._clear()
+        elif kind == "interaction_end":
+            self.interactions -= 1
+            if self.interactions == 0 and self.tty:
+                self.console.write("\n")
         elif kind == "warning":
             self._line(("[警告] ", "33"), (event["message"], None))
         elif kind == "error":
@@ -124,7 +137,7 @@ class Terminal:
             self._line(("[失败] ", "31"), (f"总耗时 {now - self.build_started:.1f}s", "1"))
             for line in wrapped(event["message"], self.console.width() if self.tty else 10000):
                 self._line((line, "31"))
-        if self.dynamic and self.running and kind not in {"output", "step_end", "build_start"}:
+        if self.dynamic and self.running and not self.interactions and kind not in {"output", "step_end", "build_start"}:
             self._draw(now, force=kind != "tick")
 
     def _separator(self):

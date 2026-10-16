@@ -11,5 +11,8 @@ requires-python = ">=3.11"
 authors = [{name = "user-no-found"}]
 dependencies = []
 
+[project.optional-dependencies]
+images = ["Pillow==12.3.0"]
+
 [project.scripts]
 buildflow = "buildflow.cli:main"

@@ -57,6 +57,14 @@ class Context:
         """Report a scoped semantic action; labels must not contain secrets."""
         return self.activities.activity(name, target=target)
 
+    def notice(self, message: str, *, level: str = "info") -> None:
+        """Print a separate safe message through the shared terminal writer."""
+        self.activities.notice(message, level=level)
+
+    def interaction(self):
+        """Pause presentation until the foreground terminal operation finishes."""
+        return self.activities.interaction()
+
     def status(self, message: str) -> None:
         """Report deliberate activity detail, never raw argv or capture payloads."""
         self.activities.status(message)

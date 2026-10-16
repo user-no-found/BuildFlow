@@ -175,6 +175,30 @@ def compile_target(ctx):
 
 `ctx.activity(name, *, target="")` 是可嵌套上下文，完成时保留动作结果，抛异常时只标记该动作结束；`ctx.status(message)` 更新当前动作详情。标签和详情必须是调用者有意提供的安全文本，不能包含令牌、原始 argv 或捕获的 JSON/补丁。原 `run` / `capture` 调用接口不变。Context 直接构造时动作接口默认不输出，不要求第三方 runner 实现额外属性。作用域使用 Python contextvars；将工作交给新线程时，可用 `contextvars.copy_context().run` 显式传递当前作用域。
 
+
+独立提示使用 `ctx.notice(message, level="info")`，level 可选 info、warning、error。
+提示通过同一事件线程输出完整文本，按终端宽度换行；TTY 分别使用青、黄、红色，
+`NO_COLOR` 和稳定文本模式遵循相同的显示规则。
+
+需要同步终端输入的操作使用 `with ctx.interaction():`。进入时等待前序提示输出完成，
+清除进度行并暂停心跳展示，其他展示延至作用域结束；退出或异常时恢复。
+交互程序直接读写控制终端，输入不进入 BuildFlow 的命令日志或事件。
+作用域内不要调用捕获输入的 runner，多个并行任务需要由调用方串行安排终端交互。
+
+POSIX 步骤在实际需要 root 权限时调用共享授权方法：
+
+```python
+from buildflow.privilege import require_sudo
+
+def verify_privileged(ctx):
+    require_sudo(ctx, "隔离生命周期验证")
+    run_bounded_root_fixture()
+```
+
+`require_sudo` 复用有效的系统授权；需要密码时先输出黄色提示，再由系统 `sudo -v`
+直接在控制终端请求授权。未授权的非交互环境、缺少 sudo、检查超时或授权失败会明确停止。
+它只取得授权，具体 root 命令仍由调用方明确执行；不修改 sudo 策略或使整个构建以 root 运行。
+
 事件中的 `activity_start/end` 使用同一 `id`，开始事件含 `parent_id/name/target`，结束事件含 `outcome/elapsed`；`activity_status` 含 `activity_id/message`。`command` 和 `command_end` 使用同一 `id/activity_id/label`，结束事件含真实 `returncode/elapsed`，未启动的进程返回码为 `null`。命令摘要跳过已识别的 `nice` / `taskset` 包装，仅显示安全的主程序名和允许的 Go 子命令，不展示其余参数或环境。TTY 不将任意子进程输出转成活动详情；`capture` stdout 只返回调用者并保留在日志和事件中，不回显。非 TTY 的普通命令输出保留可读文本，跨输出块清理终端控制序列。
 
 非零命令退出并不自动意味着构建失败：应用可以捕获预期负向验证的异常。只有逃出构建操作的异常决定最终失败。失败摘要包含阶段、退出码和有界输出尾部，stderr/stdout 各最多 6 行、每行最多末尾 400 个字符；完整诊断仍在日志中。`BuildError.reported` 表示最终错误事件已经交付 UI，外层 CLI 只在它为 false 时打印异常，避免重复摘要。
@@ -227,6 +251,35 @@ print(result.report)
 `Terminal(stream=None)` 是独立 callable sink，接受 `build_start`、`step_start`、`output`、`tick`、`step_end`、`build_end`、`error` 事件，不启动进程。各事件字段可从 `contracts`、`pipeline` 和 `api` 的调用查看；自定义 sink 可通过 `build(ui=sink)` 接入，原始日志仍由引擎保留。
 
 `load_project(path, version="")` 从 `buildflow.project` 导入；传工具版本时验证约束。`select_project(project=None, workspaces=(), target=None, max_depth=4, max_directories=1000, validator=None)` 从 `buildflow.cli` 导入，返回 `Project`。其他格式工具可提供 `validator(path)->Project`，在发现时就显示格式专属错误。`buildflow.discovery.discover` 只返回候选与警告，不做选择。
+
+## PNG 与 ICO 资产
+
+图像功能使用可选依赖 `buildflow[images]`（Pillow 12.3.0）；普通构建与 `buildflow.images` 导入不会初始化 Pillow。源码方式运行时，由调用方环境提供该依赖，未安装时调用图像功能会给出明确错误。
+
+```python
+from buildflow.images import inspect_png, prepare_icons
+
+info = inspect_png(ctx.project.root / "assets/icon.png")
+icons = prepare_icons(
+    ctx.project.root / "assets/icon.png", ctx.work,
+    png_sizes=(64, 256),
+    variants={64: ctx.project.root / "assets/icon-64.png"},
+    ico_sizes=(16, 32, 64),
+)
+ctx.metadata["icons"] = icons["metadata"]
+# icons["png"]: {64: Path(...), 256: Path(...)}
+# icons["ico"]: Path(...)；未请求 ICO 时为 None
+```
+
+`inspect_png(path, *, max_bytes=20971520, max_pixels=16777216)` 返回 `path/width/height/mode/bytes/sha256/color_space/color_basis`。读取普通单帧 PNG，检查完整结构、CRC、像素与字节上限；拒绝动画、截断、额外尾部、符号链接及含 `..` 的路径。不接受 JPEG 或仅改扩展名的文件。
+
+无色彩标记的 PNG 按 sRGB 解释，并记录 `assumed-untagged`，而非声称有显式色标。支持标准 sRGB/gAMA/cHRM 组合；矛盾声明拒绝。ICC 是否可保留通过与 LittleCMS 标准 sRGB profile 的颜色变换标签及相关头字段比较，不以名称猜测：匹配的 profile 标为 `srgb/icc-srgb-transform`；其他有效 RGB/灰度 ICC 标为 `icc/icc-profile`，可以作为转换主源。不同形式但无法确认的 sRGB ICC 也可能落入此类，不能作为要求原字节保留的显式变体。非标准且没有 ICC 的 gamma/色度返回 `unsupported`，生成接口拒绝；HDR PNG 不支持。
+
+`prepare_icons(source, work, *, png_sizes=(64, 256), variants=None, ico_sizes=())` 为每次调用创建独立 `work/assets/icons-*` 目录，不回写源文件，不覆盖既有资产；调用方应提供自己管理的工作目录。`png` 映射使用整数尺寸键，`metadata` 可直接序列化为 JSON，记录源文件、显式变体、输出的路径/摘要/大小，以及缩放和透明补边规则。异常或取消清理本次输出目录。
+
+显式 `variants` 必须对应请求的 PNG 尺寸、精确正方形且具有支持的 sRGB 色彩解释；合格时复制原字节，包括 RGB/调色板等原始模式。非法变体明确拒绝，不用主源替换。缺失尺寸由主源等比缩放并居中透明补边，输出带 sRGB 标记的 8 位 RGBA PNG；需要转换的 ICC 主源通过色彩管理转换并保留 alpha。ICO 按请求尺寸独立派生，不借用显式 PNG 变体。
+
+PNG 尺寸范围为 1..4096，ICO 为 1..256，各最多 32 个不重复整数尺寸；合计输出最多 16777216 像素，合计输入最多 41943040 字节，每个输入另受默认 PNG 限制。工具不内置应用名称、品牌配置、FPK 路径或飞牛的文件大小规则，这些由消费方检查和映射。
 
 ## 固定 Git 来源
 
