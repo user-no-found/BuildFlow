@@ -64,7 +64,7 @@ def main(argv=None) -> int:
     parser.add_argument("--adapter", help="明确构建入口 module:function；发现时不加载")
     versions = parser.add_mutually_exclusive_group()
     versions.add_argument("--build-version", help="本次严格 x.x.x 版本并写回项目")
-    versions.add_argument("--next-version", action="store_true", help="项目 patch 版本加一并写回")
+    versions.add_argument("--next-version", action="store_true", help="使用所选发布类型的下一版本")
     parser.add_argument("--channel", choices=("stable", "test"), help="正式或测试构建类型")
     args = parser.parse_args(argv)
     try:

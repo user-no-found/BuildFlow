@@ -22,6 +22,7 @@ from .project import load_project
 from .runner import Runner
 from .terminal import Terminal
 from .versioning import choose_version, persist_version
+from .version_history import VersionHistory
 
 
 def _expand(value: str, context: Context) -> str:
@@ -78,9 +79,11 @@ def build(project_path: Path | str | Project, *, steps=None, artifacts=None,
     output = _owned_directory(project.root, "output")
     with Lock(state / "build.lock"):
         project = load_project(project.path, tool_version)
+        history = VersionHistory(project)
         selected_version = choose_version(project, build_version=build_version,
-                                          next_version=next_version, installed_version=installed_version, channel=channel)
+                                          next_version=next_version, installed_version=installed_version, channel=channel, history=history)
         if selected_version is not None:
+            history.begin(selected_version)
             persist_version(project, selected_version)
             project = load_project(project.path, tool_version)
         if configure is not None:
@@ -122,6 +125,8 @@ def build(project_path: Path | str | Project, *, steps=None, artifacts=None,
                           "target_os": project.config.get("target_os"), "target_arch": project.config.get("target_arch"),
                           "tools": {"buildflow": identity()}, "metadata": context.metadata,
                           "log": str(work / "build.log"), "events": str(work / "events.jsonl")}
+                if selected_version is not None:
+                    report["version_state"] = history.committed_state(selected_version)
                 with context.activity("发布产物"):
                     sink.flush()
                     if sink.failure is not None:

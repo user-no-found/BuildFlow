@@ -76,12 +76,12 @@ class PublicationTests(unittest.TestCase):
         self.assertTrue((self.root / "output/demo_1.2.5.bin").exists())
         self.assertTrue(artifact.exists())
 
-    def test_channels_use_only_project_version_and_strict_suffix(self):
+    def test_channels_advance_successful_base_and_strict_suffix(self):
         for arguments, expected in [
             (("--next-version", "--channel", "test"), "1.2.3-01"),
             (("--next-version",), "1.2.3-02"),
-            (("--next-version", "--channel", "stable"), "1.2.3"),
-            (("--next-version",), "1.2.4"),
+            (("--next-version", "--channel", "stable"), "1.2.4"),
+            (("--next-version",), "1.2.5"),
             (("--build-version", "1.2.4-99"), "1.2.4-99"),
             (("--next-version",), "1.2.4-100"),
         ]:
@@ -126,7 +126,7 @@ build(stale,next_version=True)
         import pty
         def launch():
             master, slave = pty.openpty()
-            code = "from buildflow.api import build;import sys;build(sys.argv[1],installed_version='9.9.9')"
+            code = "from buildflow.api import build;import sys;build(sys.argv[1],installed_version='1.2.3')"
             process = subprocess.Popen([sys.executable, "-c", code, str(self.project)], cwd=self.root,
                                        env=self.env, stdin=slave, stdout=slave, stderr=slave)
             os.close(slave)
@@ -158,7 +158,7 @@ build(stale,next_version=True)
         os.write(master, b"\n")
         text = finish(process, master, output)
         self.assertEqual(process.returncode, 0, text)
-        self.assertIn("已安装版本: 9.9.9", text)
+        self.assertIn("已安装版本: 1.2.3", text)
         self.assertIn("构建版本 [1.2.4]", text)
         self.assertEqual(self.version(), "1.2.4")
         for answer, expected in ((b"2.3.4\n", "2.3.4"), (b"2.3\n", "2.3.4"), (b"\x04", "2.3.4")):
@@ -198,11 +198,10 @@ build(sys.argv[1],configure=configure,installed_version='99.99.99')
         for current, answer, expected in (("1.2.3", b"\n\n", "1.2.4"),
                                           ("1.2.3-02", b"\n\n", "1.2.3-03"),
                                           ("1.2.3", b"2\n\n", "1.2.3-01"),
-                                          ("1.2.3-02", b"1\n\n", "1.2.3")):
+                                          ("1.2.3-02", b"1\n\n", "1.2.4")):
             with self.subTest(current=current, expected=expected):
-                data = json.loads(self.project.read_text())
-                data['version'] = current
-                self.project.write_text(json.dumps(data))
+                seeded = self.run_cli('--build-version', current)
+                self.assertEqual(seeded.returncode, 0, seeded.stderr)
                 master, slave = pty.openpty()
                 process = subprocess.Popen([sys.executable, '-c', code, str(self.project), expected],
                                            env=self.env, cwd=self.root, stdin=slave, stdout=slave, stderr=slave)

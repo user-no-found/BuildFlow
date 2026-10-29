@@ -115,18 +115,24 @@ buildflow --project /path/to/application/project.json
 
 ## 应用版本
 
-可选顶层 `project.json.version` 是应用唯一版本源；没有该字段的通用项目保持无版本交互。已声明时，构建在项目锁内重新读取版本，显示已安装版本和项目版本，再选择正式或测试类型，最后选择本次版本。已安装信息由调用者提供，只用于展示；没有探测器时显示“未检测”，探测器确认不存在时显示“未安装”。
+顶层 `project.json.version` 是本次编译和发布的唯一版本源。构建在项目锁内重新读取配置，显示已安装版本、项目版本和选版基线，再选择正式或测试类型及本次版本。调用者提供 `installed_version` 时，即使项目尚无 `version` 字段，也进入选版并在选择通过后写入该字段；没有版本字段且未提供安装信息的通用项目保持无版本交互。没有探测器时显示“未检测”，探测器确认不存在时显示“未安装”；读取失败或版本格式无效会报错，不当作未安装。
 
-正式版本是严格 `x.x.x`，测试版本是 `x.x.x-xx`。数字部分无前导零，测试后缀为正整数、至少两位补零；例如 `-01`、`-99`、`-100`，不接受 `-00`、`-1`、`-001`。类型菜单回车保持项目当前类型，版本菜单回车使用下表默认值：
+正式版本是严格 `x.x.x`，测试版本是 `x.x.x-xx`。数字部分无前导零，测试后缀为正整数、至少两位补零；例如 `-01`、`-99`、`-100`，不接受 `-00`、`-1`、`-001`。默认优先重试有效候选，其次使用本项目最近成功打包版本；没有成功记录时，安装探测器提供已安装版本，确认未安装则从 `0.0.0` 开始。未提供安装探测器的通用版本化项目使用声明版本初始化。类型菜单回车采用待重试候选或基线的类型，版本默认如下：
 
-| 当前项目版本 | 选择类型 | 默认构建版本 |
+| 当前成功版本或初始基线 | 选择类型 | 默认构建版本 |
 |---|---|---|
+| 首次且未安装 | 测试 | `0.0.0-01` |
+| 首次且未安装 | 正式 | `0.0.1` |
 | `1.2.3` | 正式 | `1.2.4` |
 | `1.2.3-02` | 测试 | `1.2.3-03` |
 | `1.2.3` | 测试 | `1.2.3-01` |
-| `1.2.3-02` | 正式 | `1.2.3` |
+| `1.2.3-02` | 正式 | `1.2.4` |
 
-默认值始终来自项目版本。手动输入必须与所选类型一致。选择通过后，先原子写回 `project.json.version`，再创建适配计划和执行构建；后续失败仍保留用户已选版本。非法输入、EOF 或选择期间取消不改版本。写回前重新核对 JSON 内容；若用户在选择期间修改了其他字段，拒绝覆盖并提示重新构建，保留外部编辑。锁覆盖版本读取、选择、写回、计划和发布，另一个并发构建不能读取旧值后覆盖选择。
+`project.json.version` 提供本次实际编译与封包的版本。选择通过后先写入 `.build/version-attempt.json` 候选记录，再原子写回项目版本，最后创建适配计划；构建、配置、验证或发布失败及取消后，下次同类型默认重试该候选，手动选择的跨版本候选同样保留。候选不代表成功构建。
+
+成功计数保存在 `.build/last-success.json` 引用的报告 `version_state` 中，仅当全部步骤通过并提交发布指针后生效。正式 `0.0.1` 成功时，测试基线为 `0.0.1`、内部序号为 `0`，即记录意义上的 `0.0.1-00`；首次实际测试默认 `0.0.1-01`。该候选失败后序号仍为 `0`，成功后才成为 `1`。`-00` 不允许作为实际构建版本。成功记录优先于安装版本和项目字段，因此新包尚未安装也会继续递增；手动编辑项目字段不会代替成功记录，指定版本应使用交互输入或 `--build-version`。保留 `.build` 中的成功和候选记录才能保持连续计数与重试状态；删除记录后按上述首次规则重新初始化。
+
+非法输入、EOF 或选择期间取消不改版本。写回前重新核对 JSON 内容；若用户在选择期间修改了其他字段，拒绝覆盖并提示重新构建，保留外部编辑。锁覆盖版本读取、选择、写回、计划和发布，另一个并发构建不能读取旧值后覆盖选择。
 
 非交互环境必须明确策略：
 
@@ -136,7 +142,7 @@ buildflow --project /path/to/project.json --build-version 1.2.4-01
 buildflow --project /path/to/project.json --next-version --channel test
 ```
 
-`--build-version` 按格式推导类型；如果同时给 `--channel stable|test`，两者必须一致。`--next-version` 使用上述默认规则，省略 channel 时保持项目类型。EOF 从不当作回车默认。版本选择会改变应用项目文件，Git 用户可正常审查此配置变更。
+`--build-version` 按格式推导类型；如果同时给 `--channel stable|test`，两者必须一致。`--next-version` 使用上述默认规则，省略 channel 时保持待重试候选类型，没有候选时采用选版基线的类型。EOF 从不当作回车默认。版本选择会改变应用项目文件，Git 用户可正常审查此配置变更。
 
 ## 工作区、日志和成功结果
 
@@ -244,7 +250,7 @@ print(result.report)
 
 `build(project_path, *, steps=None, artifacts=None, metadata=None, ui=None, build_version=None, next_version=False, channel=None, installed_version=None, configure=None)` 返回 `BuildResult(run_id, output, report, metadata)`；output 是项目 `output/`，report 是本次 `.build/<run-id>/report.json`。`steps=None` 使用声明步骤；显式列表替代声明。`declared_steps(project)` 可把已验证声明转为步骤，方便其他包追加自己的步骤。`artifacts` 接受列表或构建结束后调用的 `callable(ctx)`；省略时使用声明产物。
 
-`installed_version` 接受显示字符串或 `callable(project)`，回调返回 `None` 表示未安装；省略参数表示未检测。`configure(project)` 在持锁、版本写回及重载之后调用，返回包含 `steps/artifacts/metadata` 的字典；依赖项目元数据的 adapter 必须在此回调中创建，以免闭包捕获选择前的版本。`ctx.project` 与 configure 接收同一份本次配置。
+`installed_version` 接受严格格式的版本字符串或 `callable(project)`，作为无成功记录时的安装基线；回调返回 `None` 表示未安装并从 `0.0.0` 初始化，省略参数表示未检测。调用发生在项目锁内、adapter 加载前，回调异常保留为错误。`configure(project)` 在持锁、版本写回及重载之后调用，返回包含 `steps/artifacts/metadata` 的字典；依赖项目元数据的 adapter 必须在此回调中创建，以免闭包捕获选择前的版本。`ctx.project` 与 configure 接收同一份本次配置。
 
 每个 `Step(name, action)` 的 `action(ctx)` 接收 `Context`：`project`（`path/root/data/config`）、`work`、`output`、`runner`、可写 `metadata`。步骤直接抛出异常即失败。`BuildError(message, exit_code=1)` 保留可报告退出码。`Runner(log_path, sink=None)` 可独立使用；`run(argv, cwd, env=None)` 返回 `Completed`，`capture` 只返回 stdout 字符串，同时仍把两流落盘。runner 不把失败的输出冒充成功结果。
 

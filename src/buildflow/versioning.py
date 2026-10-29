@@ -35,13 +35,13 @@ def next_patch(value: str) -> str:
 
 
 def suggested_version(value: str, channel: str) -> str:
-    """Advance within a channel or retain the base when switching channels."""
+    """Increment the stable patch or the test counter on its unchanged base."""
     current_channel = version_channel(value)
     if channel not in ("stable", "test"):
         raise BuildError("channel 必须为 stable 或 test")
     base, _, suffix = value.partition("-")
     if channel == "stable":
-        return base if current_channel == "test" else next_patch(base)
+        return next_patch(base)
     if current_channel == "stable":
         return base + "-01"
     return f"{base}-{int(suffix) + 1:02d}"
@@ -59,33 +59,42 @@ def _answer(prompt: str) -> str:
 
 
 def choose_version(project: Project, *, build_version=None, next_version=False,
-                   installed_version=None, channel=None) -> str | None:
+                   installed_version=None, channel=None, history=None) -> str | None:
     """Choose type and version under the caller's project lock, without writes."""
     if build_version is not None and next_version:
         raise BuildError("--build-version 与 --next-version 不能同时使用")
     if channel not in (None, "stable", "test"):
         raise BuildError("--channel 必须为 stable 或 test")
-    if "version" not in project.data:
+    has_provider = callable(installed_version) or installed_version is not None
+    if "version" not in project.data and not has_provider:
         if build_version is not None or next_version or channel is not None:
             raise BuildError("请先在 project.json 声明 version")
         return None
-    current = validate_version(project.data["version"])
-    has_provider = callable(installed_version) or installed_version is not None
+    current = project.data.get("version")
+    if current is not None:
+        validate_version(current)
     installed = installed_version(project) if callable(installed_version) else installed_version
+    initial = (validate_version(installed) if installed is not None else "0.0.0") if has_provider else None
+    baseline = history.baseline(current, initial) if history is not None else initial or current
     installed_label = plain(str(installed)) if installed is not None else ("未安装" if has_provider else "未检测")
     prompt_line([("已安装版本: ", "2"), (installed_label, "1")])
-    prompt_line([("项目版本: ", "2"), (current, "1;36")])
+    prompt_line([("项目版本: ", "2"), (current or "未设置", "1;36")])
+    prompt_line([("选版基线: ", "2"), (baseline, "1;36")])
     if build_version is not None:
         selected_channel = version_channel(build_version)
         if channel is not None and channel != selected_channel:
             raise BuildError("--channel 与 --build-version 格式矛盾")
         return build_version
+    def suggest(channel):
+        return history.suggest(current, channel, initial) if history is not None else suggested_version(baseline, channel)
+
+    current_channel = history.default_channel(current, initial) if history is not None else version_channel(baseline)
     if next_version:
-        return suggested_version(current, channel or version_channel(current))
+        return suggest(channel or current_channel)
     if not sys.stdin.isatty() or not sys.stderr.isatty():
         raise BuildError("非交互构建必须指定 --build-version X.Y.Z[-XX] 或 --next-version，可配 --channel")
     if channel is None:
-        default = version_channel(current)
+        default = current_channel
         prompt_line([("1. ", "36"), ("正式版", "1"), ("（x.x.x）", "2")])
         prompt_line([("2. ", "36"), ("测试版", "1"), ("（x.x.x-xx）", "2")])
         default_number = "1" if default == "stable" else "2"
@@ -94,7 +103,7 @@ def choose_version(project: Project, *, build_version=None, next_version=False,
         if selected not in choices:
             raise BuildError("构建类型必须为 stable 或 test，项目版本未修改")
         channel = choices[selected]
-    suggested = suggested_version(current, channel)
+    suggested = suggest(channel)
     selected = _answer(f"构建版本 [{suggested}]（回车采用）: ") or suggested
     if version_channel(selected) != channel:
         raise BuildError("输入版本格式与构建类型矛盾，项目版本未修改")
@@ -110,7 +119,7 @@ def persist_version(project: Project, selected: str) -> None:
         raise BuildError(f"写回版本前无法重新读取项目配置: {exc}") from exc
     if current != project.data:
         raise BuildError("版本选择期间 project.json 已被修改；保留外部改动，请重新构建")
-    if selected == project.data["version"]:
+    if selected == project.data.get("version"):
         return
     content = {**project.data, "version": selected}
     temporary = None
